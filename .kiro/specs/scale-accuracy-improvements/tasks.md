@@ -127,8 +127,8 @@
 - [ ] 7. Checkpoint - Убедиться что все тесты проходят
   - Убедиться что все тесты проходят, спросить пользователя если возникли вопросы.
 
-- [ ] 8. Реализовать менеджер конфигурации (AccuracyConfigManager)
-  - [ ] 8.1 Создать класс AccuracyConfigManager в `src/config/accuracy_config.cpp`
+- [x] 8. Реализовать менеджер конфигурации (AccuracyConfigManager)
+  - [x] 8.1 Создать класс AccuracyConfigManager в `src/config/accuracy_config.cpp`
     - Реализовать методы: `init()`, `enableOutlierFilter()`, `enableTemperatureComp()`, `enableAdaptiveAveraging()`, `setOutlierMethod()`, `setOutlierWindowSize()`, `setTempCoefficients()`, `setAdaptiveParams()`, `save()`, `load()`, `reset()`, `exportConfig()`, `importConfig()`, `printStatus()`
     - Реализовать функцию `validateConfig()` для проверки диапазонов параметров
     - Реализовать функцию `computeCRC16()` для вычисления контрольной суммы
