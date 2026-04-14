@@ -96,8 +96,8 @@
     - Генератор: 100+ последовательностей с нормальным распределением (μ, σ) и выбросами
     - Проверка: выброс (|x - μ| > 3σ) отбрасывается, возвращается lastValidValue, счётчик инкрементируется
 
-- [ ] 6. Реализовать модуль адаптивного усреднения (AdaptiveAverager)
-  - [ ] 6.1 Создать класс AdaptiveAverager в `src/filters/adaptive_averager.cpp`
+- [x] 6. Реализовать модуль адаптивного усреднения (AdaptiveAverager)
+  - [x] 6.1 Создать класс AdaptiveAverager в `src/filters/adaptive_averager.cpp`
     - Реализовать методы: `setEnabled()`, `setStabilityThreshold()`, `setSampleRange()`, `computeSampleCount()`, `getCurrentSampleCount()`, `getCurrentStdDev()`, `load()`, `save()`
     - Реализовать буфер последних 10 измерений веса для вычисления σ
     - Реализовать функцию `computeStdDev()` для вычисления стандартного отклонения
