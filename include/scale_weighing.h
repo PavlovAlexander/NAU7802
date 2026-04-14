@@ -25,3 +25,7 @@ float computeWeight(float k, float b, int32_t rawADC);
 // Один цикл взвешивания (вызывается из loop()).
 // Читает rawADC, вычисляет calibrated, выводит в консоль.
 void weighingTick(NAU7802& scale, const CalibrationData& cal);
+
+// Статистика
+void printAccuracyStatistics();
+void resetAccuracyStatistics();
