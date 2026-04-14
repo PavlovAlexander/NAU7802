@@ -20,8 +20,8 @@
   - Обеспечить обратную совместимость: при загрузке старой структуры установить дефолтные значения для новых полей
   - _Требования: 1.1, 1.5, 1.6, 5.2, 7.1, 7.2_
 
-- [ ] 2. Реализовать модуль нелинейной калибровки (CalibrationModule)
-  - [ ] 2.1 Создать класс CalibrationModule в `src/calibration/nonlinear_calibration.cpp`
+- [-] 2. Реализовать модуль нелинейной калибровки (CalibrationModule)
+  - [x] 2.1 Создать класс CalibrationModule в `src/calibration/nonlinear_calibration.cpp`
     - Реализовать методы: `setMethod()`, `calibrate()`, `rawToWeight()`, `getR2()`, `load()`, `save()`
     - Реализовать `computeLinear()` для линейной регрессии (текущий метод)
     - Реализовать `computePiecewiseLinear()` для построения 3 сегментов из 4 точек
