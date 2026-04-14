@@ -73,8 +73,8 @@
 - [ ] 4. Checkpoint - Убедиться что все тесты проходят
   - Убедиться что все тесты проходят, спросить пользователя если возникли вопросы.
 
-- [ ] 5. Реализовать фильтр выбросов (OutlierFilter)
-  - [ ] 5.1 Создать класс OutlierFilter в `src/filters/outlier_filter.cpp`
+- [x] 5. Реализовать фильтр выбросов (OutlierFilter)
+  - [x] 5.1 Создать класс OutlierFilter в `src/filters/outlier_filter.cpp`
     - Реализовать методы: `setMethod()`, `setWindowSize()`, `setSigmaThreshold()`, `filter()`, `getOutlierCount()`, `resetStatistics()`, `load()`, `save()`
     - Реализовать медианный фильтр: кольцевой буфер размера 3/5/7, сортировка, возврат медианы
     - Реализовать функцию `computeMedian()` с сортировкой временного массива
