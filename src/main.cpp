@@ -43,6 +43,10 @@ void setup() {
 
     if (initHardware(myScale)) {
         currentState = STATE_READY;
+        
+        // Инициализация компонентов точности
+        printTagged("INIT", "Initializing accuracy components...");
+        initAccuracyComponents();
     } else {
         currentState = STATE_ERROR;
     }

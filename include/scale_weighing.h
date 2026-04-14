@@ -2,6 +2,23 @@
 #include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
 #include "calibration_data.h"
 
+// Forward declarations
+class CalibrationModule;
+class TemperatureCompensator;
+class OutlierFilter;
+class AdaptiveAverager;
+class AccuracyConfigManager;
+
+// Инициализация компонентов точности (вызывается из setup())
+void initAccuracyComponents();
+
+// Функции доступа к компонентам (для консольных команд)
+CalibrationModule& getCalibrationModule();
+TemperatureCompensator& getTemperatureCompensator();
+OutlierFilter& getOutlierFilter();
+AdaptiveAverager& getAdaptiveAverager();
+AccuracyConfigManager& getAccuracyConfig();
+
 // Вычисляет вес по линейной модели: weight = k * rawADC + b
 float computeWeight(float k, float b, int32_t rawADC);
 

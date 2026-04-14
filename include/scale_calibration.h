@@ -3,9 +3,10 @@
 #include "calibration_data.h"
 
 // Запускает интерактивный 4-шаговый мастер калибровки.
-// Заполняет cal.points[], вычисляет k, b, r2 через math_utils.
+// Заполняет cal.points[], вычисляет коэффициенты в зависимости от метода.
+// method: метод калибровки (по умолчанию CAL_LINEAR для обратной совместимости)
 // Возвращает true если R² >= 0.99.
-bool runCalibrationWizard(NAU7802& scale, CalibrationData& cal);
+bool runCalibrationWizard(NAU7802& scale, CalibrationData& cal, CalibrationMethod method = CAL_LINEAR);
 
 // Собирает numSamples отсчётов с интервалом 100 мс, возвращает среднее.
 int32_t collectSamples(NAU7802& scale, int numSamples);
