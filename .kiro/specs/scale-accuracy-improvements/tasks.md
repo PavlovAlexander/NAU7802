@@ -20,7 +20,7 @@
   - Обеспечить обратную совместимость: при загрузке старой структуры установить дефолтные значения для новых полей
   - _Требования: 1.1, 1.5, 1.6, 5.2, 7.1, 7.2_
 
-- [-] 2. Реализовать модуль нелинейной калибровки (CalibrationModule)
+- [x] 2. Реализовать модуль нелинейной калибровки (CalibrationModule)
   - [x] 2.1 Создать класс CalibrationModule в `src/calibration/nonlinear_calibration.cpp`
     - Реализовать методы: `setMethod()`, `calibrate()`, `rawToWeight()`, `getR2()`, `load()`, `save()`
     - Реализовать `computeLinear()` для линейной регрессии (текущий метод)
@@ -43,8 +43,8 @@
     - Генератор: 100+ наборов калибровочных точек и методов калибровки
     - Проверка: R² ∈ [0, 1] для всех методов
 
-- [ ] 3. Реализовать модуль температурной компенсации (TemperatureCompensator)
-  - [ ] 3.1 Создать класс TemperatureCompensator в `src/calibration/temperature_compensation.cpp`
+- [x] 3. Реализовать модуль температурной компенсации (TemperatureCompensator)
+  - [x] 3.1 Создать класс TemperatureCompensator в `src/calibration/temperature_compensation.cpp`
     - Реализовать методы: `setEnabled()`, `setCalibrationTemp()`, `setCoefficients()`, `calibrateTwoPoint()`, `compensate()`, `readTemperature()`, `load()`, `save()`
     - Реализовать формулы коррекции: k_corrected = k × (1 + α × ΔT), b_corrected = b + β × ΔT
     - Реализовать вычисление α и β из двух калибровок при разных температурах
