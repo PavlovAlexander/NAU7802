@@ -56,6 +56,13 @@ void cmd_accuracy_stats();
 // Примечание: cmd_accuracy_log_export() и cmd_accuracy_log_clear()
 // будут добавлены в Task 12.1
 
+// Forward declaration
+class MeasurementLogger;
+
+MeasurementLogger& getMeasurementLogger();
+void cmd_accuracy_log_export();
+void cmd_accuracy_log_clear();
+
 // ============================================================================
 // Тестовые команды
 // ============================================================================

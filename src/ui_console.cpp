@@ -241,6 +241,23 @@ void cmd_accuracy_stats() {
 // Примечание: cmd_accuracy_log_export() и cmd_accuracy_log_clear() 
 // будут реализованы в Task 12.1 вместе с MeasurementLogger
 
+#include "measurement_logger.h"
+
+// Глобальный экземпляр логгера
+static MeasurementLogger g_measurementLogger;
+
+MeasurementLogger& getMeasurementLogger() {
+    return g_measurementLogger;
+}
+
+void cmd_accuracy_log_export() {
+    g_measurementLogger.exportCSV();
+}
+
+void cmd_accuracy_log_clear() {
+    g_measurementLogger.clear();
+}
+
 // ============================================================================
 // Тестовые команды
 // ============================================================================
