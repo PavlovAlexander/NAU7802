@@ -13,7 +13,7 @@
 
 ## Задачи
 
-- [ ] 1. Создать структуры данных и базовую инфраструктуру
+- [x] 1. Создать структуры данных и базовую инфраструктуру
   - Расширить `CalibrationData` в `include/calibration_data.h` для поддержки нелинейной калибровки (добавить поля: `CalibrationMethod method`, `float coeffs[4]`, `float T_cal`, `float alpha`, `float beta`)
   - Создать enum `CalibrationMethod` с вариантами: `CAL_LINEAR`, `CAL_PIECEWISE_LINEAR`, `CAL_POLYNOMIAL_2`, `CAL_POLYNOMIAL_3`
   - Создать структуру `AccuracyConfig` в `include/config/accuracy_config.h` для хранения конфигурации всех компонентов
