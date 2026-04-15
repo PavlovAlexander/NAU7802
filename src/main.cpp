@@ -7,6 +7,7 @@
 #include "scale_calibration.h"
 #include "scale_weighing.h"
 #include "ui_console.h"
+#include "config/accuracy_config_manager.h"
 
 // ---------------------------------------------------------------------------
 // FSM state
@@ -27,9 +28,9 @@ CalibrationData  calibration;
 AppState         currentState = STATE_INIT;
 
 // ---------------------------------------------------------------------------
-// Forward declaration
+// Forward declarations
 // ---------------------------------------------------------------------------
-void handleCommand(char cmd);
+void handleSingleChar(char cmd);
 
 // ---------------------------------------------------------------------------
 // setup()
@@ -43,7 +44,7 @@ void setup() {
 
     if (initHardware(myScale)) {
         currentState = STATE_READY;
-        
+
         // Инициализация компонентов точности
         printTagged("INIT", "Initializing accuracy components...");
         initAccuracyComponents();
@@ -56,10 +57,14 @@ void setup() {
 // loop()
 // ---------------------------------------------------------------------------
 void loop() {
-    // Read and dispatch any incoming serial command
-    if (Serial.available() > 0) {
-        char cmd = Serial.read();
-        handleCommand(cmd);
+    // Побайтовый режим: каждый полученный символ обрабатывается немедленно,
+    // без накопления строки. Это позволяет управлять устройством одиночными
+    // нажатиями клавиш без Enter.
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        if (c != '\r' && c != '\n') {
+            handleSingleChar(c);
+        }
     }
 
     switch (currentState) {
@@ -68,13 +73,12 @@ void loop() {
             static bool calCheckDone = false;
             static bool readyMsgShown = false;
             static bool hasCalibration = false;
-            
+
             if (!calCheckDone) {
                 hasCalibration = loadCalibration(calibration);
                 calCheckDone = true;
-                
+
                 if (hasCalibration) {
-                    // Калибровка найдена — предложить выбор
                     if (!readyMsgShown) {
                         printTagged("INIT", "Calibration found in memory");
                         printTagged("INIT", "Press 'L' to LOAD calibration and start weighing");
@@ -82,9 +86,8 @@ void loop() {
                         readyMsgShown = true;
                     }
                 } else {
-                    // Калибровки нет — сразу предложить калибровку
                     if (!readyMsgShown) {
-                        printTagged("INIT", "No calibration found. Press ENTER to calibrate");
+                        printTagged("INIT", "No calibration found. Press 'N' to calibrate");
                         readyMsgShown = true;
                     }
                 }
@@ -97,18 +100,16 @@ void loop() {
             if (runCalibrationWizard(myScale, calibration)) {
                 currentState = STATE_WEIGHING;
             }
-            // if false: wizard already printed error, stay in STATE_CALIBRATING
             break;
         }
 
         case STATE_WEIGHING: {
             static bool helpShown = false;
             if (!helpShown) {
-                printTagged("INFO", "Commands: C=calibrate | S=status | R=restart");
+                printTagged("INFO", "Weighing started. Press H for key commands.");
                 helpShown = true;
             }
             weighingTick(myScale, calibration);
-            // Без задержки — 16 отсчётов @ 80 SPS = ~200 мс → 5 выводов/сек
             break;
         }
 
@@ -123,19 +124,82 @@ void loop() {
 }
 
 // ---------------------------------------------------------------------------
-// handleCommand()
+// handleSingleChar() — все команды управляются одиночными нажатиями клавиш
+//
+// Навигация:
+//   H  — показать help
+//   R  — перезагрузить устройство
+//
+// Режим READY (ожидание после старта):
+//   L  — загрузить калибровку и начать взвешивание
+//   N  — новая калибровка
+//
+// Режим WEIGHING (взвешивание):
+//   C  — перекалибровать
+//   S  — показать статус калибровки
+//
+// Компоненты точности (работают в режиме WEIGHING):
+//   A  — статус всех компонентов accuracy
+//   D  — переключить диагностический режим (вкл/выкл)
+//   E  — экспорт конфигурации в Serial
+//   I  — импорт конфигурации (интерактивный режим)
+//   Q  — сохранить конфигурацию в NVS
+//   X  — сбросить конфигурацию к умолчаниям
+//   V  — показать статистику (выбросы, усреднение)
+//   O  — переключить фильтр выбросов (вкл/выкл)
+//
+// Test Wizard:
+//   T  — запустить / продолжить Test Wizard
+//   K  — пропустить текущий тест
+//   P  — показать отчёт теста
 // ---------------------------------------------------------------------------
-void handleCommand(char cmd) {
-    switch (cmd) {
-        case 'c':
-        case 'C':
-            currentState = STATE_CALIBRATING;
+void handleSingleChar(char cmd) {
+    // Приводим к нижнему регистру для единообразия
+    char lc = (cmd >= 'A' && cmd <= 'Z') ? cmd + 32 : cmd;
+
+    switch (lc) {
+
+        // ---------------------------------------------------------------
+        // Общие команды (любой режим)
+        // ---------------------------------------------------------------
+        case 'h':
+            Serial.println();
+            printTagged("HELP", "======== Key Commands ========");
+            printTagged("HELP", "H - this help");
+            printTagged("HELP", "R - restart device");
+            printTagged("HELP", "--- READY state ---");
+            printTagged("HELP", "L - load calibration & start weighing");
+            printTagged("HELP", "N - new calibration");
+            printTagged("HELP", "--- WEIGHING state ---");
+            printTagged("HELP", "C - recalibrate");
+            printTagged("HELP", "S - show calibration status");
+            printTagged("HELP", "--- Accuracy components ---");
+            printTagged("HELP", "A - accuracy status");
+            printTagged("HELP", "D - toggle diagnostic mode");
+            printTagged("HELP", "E - export config to serial");
+            printTagged("HELP", "I - import config (interactive)");
+            printTagged("HELP", "Q - save config to NVS");
+            printTagged("HELP", "X - reset config to defaults");
+            printTagged("HELP", "V - show statistics");
+            printTagged("HELP", "O - toggle outlier filter");
+            printTagged("HELP", "--- Test Wizard ---");
+            printTagged("HELP", "T - start / resume test wizard");
+            printTagged("HELP", "K - skip current test");
+            printTagged("HELP", "P - print test report");
+            printTagged("HELP", "==============================");
             break;
 
+        case 'r':
+            printTagged("SYS", "Restarting...");
+            delay(100);
+            ESP.restart();
+            break;
+
+        // ---------------------------------------------------------------
+        // Режим READY
+        // ---------------------------------------------------------------
         case 'l':
-        case 'L':
             if (currentState == STATE_READY) {
-                // Загрузить калибровку и перейти к взвешиванию
                 if (loadCalibration(calibration)) {
                     printTagged("INIT", "Calibration loaded. Starting weighing...");
                     currentState = STATE_WEIGHING;
@@ -146,35 +210,86 @@ void handleCommand(char cmd) {
             break;
 
         case 'n':
-        case 'N':
             if (currentState == STATE_READY) {
-                // Начать новую калибровку
                 printTagged("INIT", "Starting new calibration...");
                 currentState = STATE_CALIBRATING;
             }
             break;
 
-        case 'r':
-        case 'R':
-            ESP.restart();
+        // ---------------------------------------------------------------
+        // Режим WEIGHING — базовые команды
+        // ---------------------------------------------------------------
+        case 'c':
+            currentState = STATE_CALIBRATING;
             break;
 
         case 's':
-        case 'S':
             if (currentState == STATE_WEIGHING) {
                 printStatus(calibration);
             }
             break;
 
-        case '\n':
-        case '\r':
-            if (currentState == STATE_READY) {
-                currentState = STATE_CALIBRATING;
+        // ---------------------------------------------------------------
+        // Accuracy компоненты
+        // ---------------------------------------------------------------
+        case 'a':
+            cmd_accuracy_status();
+            break;
+
+        case 'd':
+            if (isDiagnosticMode()) {
+                cmd_accuracy_diag_off();
+            } else {
+                cmd_accuracy_diag_on();
             }
-            // STATE_CALIBRATING ENTER is handled inside runCalibrationWizard
+            break;
+
+        case 'e':
+            cmd_accuracy_export();
+            break;
+
+        case 'i':
+            cmd_accuracy_import_interactive();
+            break;
+
+        case 'q':
+            cmd_accuracy_save();
+            break;
+
+        case 'x':
+            cmd_accuracy_reset();
+            break;
+
+        case 'v':
+            cmd_accuracy_stats();
+            break;
+
+        case 'o': {
+            // Переключаем фильтр выбросов
+            AccuracyConfigManager& cfg = getAccuracyConfig();
+            bool nowEnabled = !cfg.getConfig().outlierFilterEnabled;
+            cfg.enableOutlierFilter(nowEnabled);
+            printTagged("ACCURACY", nowEnabled ? "Outlier filter ENABLED" : "Outlier filter DISABLED");
+            break;
+        }
+
+        // ---------------------------------------------------------------
+        // Test Wizard
+        // ---------------------------------------------------------------
+        case 't':
+            cmd_test_wizard_resume(myScale, calibration);
+            break;
+
+        case 'k':
+            cmd_test_wizard_skip();
+            break;
+
+        case 'p':
+            cmd_test_wizard_report();
             break;
 
         default:
             break;
     }
 }
+

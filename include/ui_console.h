@@ -41,6 +41,7 @@ void cmd_accuracy_set_adaptive_samples(uint8_t minSamples, uint8_t maxSamples);
 // Экспорт/импорт/сброс конфигурации
 void cmd_accuracy_export();
 void cmd_accuracy_import(const char* configText);
+void cmd_accuracy_import_interactive();
 void cmd_accuracy_reset();
 void cmd_accuracy_save();
 
@@ -52,9 +53,6 @@ void cmd_accuracy_diag_on();
 void cmd_accuracy_diag_off();
 bool isDiagnosticMode();
 void cmd_accuracy_stats();
-
-// Примечание: cmd_accuracy_log_export() и cmd_accuracy_log_clear()
-// будут добавлены в Task 12.1
 
 // Forward declaration
 class MeasurementLogger;
@@ -72,3 +70,14 @@ class NAU7802;
 
 void cmd_accuracy_test_stability(NAU7802& scale, const CalibrationData& cal);
 void cmd_accuracy_compare_calibration(NAU7802& scale, const CalibrationData& cal);
+
+// ============================================================================
+// Test Wizard команды
+// ============================================================================
+
+void cmd_test_wizard_start(NAU7802& scale, CalibrationData& cal);
+void cmd_test_wizard_resume(NAU7802& scale, CalibrationData& cal);
+void cmd_test_wizard_skip();
+void cmd_test_wizard_report();
+void cmd_test_wizard_export();
+void cmd_test_wizard_reset();

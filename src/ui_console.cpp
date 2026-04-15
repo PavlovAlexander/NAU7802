@@ -176,6 +176,71 @@ void cmd_accuracy_import(const char* configText) {
     }
 }
 
+void cmd_accuracy_import_interactive() {
+    // Накапливаем многострочный ввод до пустой строки или тайм-аута 10 сек
+    static char importBuf[512];
+    size_t totalLen = 0;
+    importBuf[0] = '\0';
+
+    printTagged("ACCURACY", "Paste config lines, then send empty line (or wait 10s to finish):");
+
+    const unsigned long kTimeoutMs = 10000UL;
+    unsigned long lastActivity = millis();
+
+    while (millis() - lastActivity < kTimeoutMs) {
+        if (!Serial.available()) {
+            delay(1);
+            continue;
+        }
+
+        char lineBuf[128];
+        size_t lineLen = 0;
+
+        // Читаем одну строку (до \n)
+        unsigned long lineStart = millis();
+        while (millis() - lineStart < 2000UL) {
+            if (!Serial.available()) {
+                delay(1);
+                continue;
+            }
+            char c = (char)Serial.read();
+            if (c == '\r') continue;
+            if (c == '\n') break;
+            if (lineLen < sizeof(lineBuf) - 1) {
+                lineBuf[lineLen++] = c;
+            }
+        }
+        lineBuf[lineLen] = '\0';
+
+        // Пустая строка — завершаем ввод
+        if (lineLen == 0) {
+            break;
+        }
+
+        // Добавляем строку в общий буфер
+        if (totalLen + lineLen + 2 < sizeof(importBuf)) {
+            memcpy(importBuf + totalLen, lineBuf, lineLen);
+            totalLen += lineLen;
+            importBuf[totalLen++] = '\n';
+            importBuf[totalLen] = '\0';
+        }
+
+        lastActivity = millis();
+    }
+
+    if (totalLen == 0) {
+        printError("No config data received");
+        return;
+    }
+
+    AccuracyConfigManager& config = getAccuracyConfig();
+    if (config.importConfig(importBuf)) {
+        printTagged("ACCURACY", "Configuration imported successfully");
+    } else {
+        printError("Failed to import configuration — check format");
+    }
+}
+
 void cmd_accuracy_reset() {
     AccuracyConfigManager& config = getAccuracyConfig();
     config.reset();
@@ -379,4 +444,37 @@ void cmd_accuracy_compare_calibration(NAU7802& scale, const CalibrationData& cal
                   fabs(fmax(fmax(weight1, weight2), fmax(weight3, weight4)) - 
                        fmin(fmin(weight1, weight2), fmin(weight3, weight4))) * 1000.0f);
     Serial.println("=====================================");
+}
+
+// ============================================================================
+// Test Wizard команды
+// ============================================================================
+
+#include "test_wizard.h"
+
+static TestWizard g_testWizard;
+
+void cmd_test_wizard_start(NAU7802& scale, CalibrationData& cal) {
+    g_testWizard.start(scale, cal);
+}
+
+void cmd_test_wizard_report() {
+    g_testWizard.printReport();
+}
+
+void cmd_test_wizard_export() {
+    g_testWizard.exportCSV();
+}
+
+void cmd_test_wizard_resume(NAU7802& scale, CalibrationData& cal) {
+    g_testWizard.resume(scale, cal);
+}
+
+void cmd_test_wizard_skip() {
+    g_testWizard.skipCurrent();
+}
+
+void cmd_test_wizard_reset() {
+    g_testWizard.reset();
+    printTagged("WIZARD", "Test results reset");
 }

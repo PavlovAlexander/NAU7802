@@ -105,6 +105,13 @@ int AdaptiveAverager::computeSampleCount() {
     // Вычисляем стандартное отклонение последних измерений
     currentStdDev_ = computeStdDev(historyBuffer_, historyFilled_);
     
+    // Быстрая реакция на резкие изменения (Требование 4.8):
+    // при sigma >= 2 * threshold немедленно переключаемся на minSamples
+    if (currentStdDev_ >= config_.stabilityThreshold * 2.0f) {
+        currentSampleCount_ = config_.minSamples;
+        return currentSampleCount_;
+    }
+    
     // Определяем целевое количество отсчётов
     int targetSampleCount;
     if (currentStdDev_ < config_.stabilityThreshold) {

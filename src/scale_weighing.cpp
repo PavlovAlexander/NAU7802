@@ -17,9 +17,19 @@ static OutlierFilter g_outlierFilter;
 static AdaptiveAverager g_adaptiveAvg;
 static AccuracyConfigManager g_config;
 
+// Кэш последней загруженной калибровки для оптимизации (не вызываем loadFrom на каждом тике)
+static CalibrationMethod g_lastCalMethod = CAL_LINEAR;
+static uint32_t g_lastCalTimestamp = 0;
+
 // Статистика
 static uint32_t g_totalMeasurements = 0;
 static uint32_t g_tempCompensations = 0;
+
+// Кэш температуры: обновляем не чаще раза в 10 секунд, чтобы не блокировать
+// цикл взвешивания (~100-200 мс на одно чтение из NAU7802)
+static float          g_cachedTemperature  = NAN;
+static unsigned long  g_lastTempReadMs     = 0;
+static const unsigned long TEMP_CACHE_INTERVAL_MS = 10000UL;
 
 // ============================================================================
 // Инициализация компонентов точности
@@ -158,46 +168,55 @@ void weighingTick(NAU7802& scale,
     }
     
     // Шаг 3: Применить калибровку (нелинейную, если настроена)
-    float weight = 0.0f;
-    if (cal.method != CAL_LINEAR) {
-        // Используем нелинейную калибровку
+    // Оптимизация: перезагружаем g_calibration только при смене метода или обновлении калибровки
+    if (cal.method != g_lastCalMethod || cal.timestamp != g_lastCalTimestamp) {
         g_calibration.loadFrom(cal);
-        weight = g_calibration.rawToWeight(rawADC);
-        if (diagnosticMode) {
-            const char* methodName = "UNKNOWN";
-            if (cal.method == CAL_PIECEWISE_LINEAR) methodName = "PIECEWISE_LINEAR";
-            else if (cal.method == CAL_POLYNOMIAL_2) methodName = "POLYNOMIAL_2";
-            else if (cal.method == CAL_POLYNOMIAL_3) methodName = "POLYNOMIAL_3";
-            Serial.printf("[DIAG] Calibration: %s (R²=%.4f)\n", methodName, cal.r2);
-        }
-    } else {
-        // Используем линейную калибровку (обратная совместимость)
-        weight = computeWeight(cal.k, cal.b, rawADC);
-        if (diagnosticMode) {
-            Serial.printf("[DIAG] Calibration: LINEAR (R²=%.4f)\n", cal.r2);
-        }
+        g_lastCalMethod = cal.method;
+        g_lastCalTimestamp = cal.timestamp;
     }
-    
+
+    float weight = g_calibration.rawToWeight(rawADC);
+
     if (diagnosticMode) {
+        const char* methodName = "LINEAR";
+        if (cal.method == CAL_PIECEWISE_LINEAR) methodName = "PIECEWISE_LINEAR";
+        else if (cal.method == CAL_POLYNOMIAL_2) methodName = "POLYNOMIAL_2";
+        else if (cal.method == CAL_POLYNOMIAL_3) methodName = "POLYNOMIAL_3";
+        Serial.printf("[DIAG] Calibration: %s (R²=%.4f)\n", methodName, cal.r2);
         Serial.printf("[DIAG] Weight (before temp comp): %.3f g\n", weight);
     }
-    
+
     // Шаг 4: Применить температурную компенсацию (если включена)
+    // Компенсация применяется как аддитивная поправка к уже вычисленному весу,
+    // чтобы не разрушать результат нелинейной калибровки.
+    // Поправка вычисляется как разница между компенсированным и некомпенсированным
+    // линейным весом: delta = (k_corr * raw + b_corr) - (k * raw + b)
     float temperature = NAN;
     if (cfg.temperatureCompEnabled) {
-        temperature = g_tempComp.readTemperature(scale);
+        // Читаем температуру не чаще раза в TEMP_CACHE_INTERVAL_MS, чтобы избежать
+        // задержки ~100-200 мс от переключения мультиплексора NAU7802
+        unsigned long now = millis();
+        if (isnan(g_cachedTemperature) || now - g_lastTempReadMs >= TEMP_CACHE_INTERVAL_MS) {
+            g_cachedTemperature = g_tempComp.readTemperature(scale);
+            g_lastTempReadMs = now;
+        }
+        temperature = g_cachedTemperature;
         if (!isnan(temperature)) {
             float k = cal.k;
             float b = cal.b;
-            g_tempComp.compensate(temperature, k, b);
-            // Пересчитываем вес с компенсированными коэффициентами
+            float kCorr = k;
+            float bCorr = b;
+            g_tempComp.compensate(temperature, kCorr, bCorr);
+
+            // Аддитивная температурная поправка к весу
+            float tempDelta = computeWeight(kCorr, bCorr, rawADC) - computeWeight(k, b, rawADC);
             float weightBefore = weight;
-            weight = computeWeight(k, b, rawADC);
+            weight += tempDelta;
             g_tempCompensations++;
-            
+
             if (diagnosticMode) {
                 Serial.printf("[DIAG] Temperature: %.2f °C\n", temperature);
-                Serial.printf("[DIAG] Temp compensation: %.3f mg drift\n", 
+                Serial.printf("[DIAG] Temp compensation delta: %.3f mg\n",
                              (weight - weightBefore) * 1000.0f);
             }
         }
