@@ -8,6 +8,7 @@
 #include "scale_weighing.h"
 #include "ui_console.h"
 #include "config/accuracy_config_manager.h"
+#include "hw_char_test.h"
 
 // ---------------------------------------------------------------------------
 // FSM state
@@ -152,6 +153,9 @@ void loop() {
 //   T  — запустить / продолжить Test Wizard
 //   K  — пропустить текущий тест
 //   P  — показать отчёт теста
+//
+// HW Characterization:
+//   M  — запустить тест характеризации железа (gain×SPS×chopper свип + drift + нагрузки)
 // ---------------------------------------------------------------------------
 void handleSingleChar(char cmd) {
     // Приводим к нижнему регистру для единообразия
@@ -186,6 +190,8 @@ void handleSingleChar(char cmd) {
             printTagged("HELP", "T - start / resume test wizard");
             printTagged("HELP", "K - skip current test");
             printTagged("HELP", "P - print test report");
+            printTagged("HELP", "--- HW Characterization ---");
+            printTagged("HELP", "M - run HW characterization test (gain x SPS x chopper sweep)");
             printTagged("HELP", "==============================");
             break;
 
@@ -286,6 +292,13 @@ void handleSingleChar(char cmd) {
 
         case 'p':
             cmd_test_wizard_report();
+            break;
+
+        // ---------------------------------------------------------------
+        // HW Characterization Test
+        // ---------------------------------------------------------------
+        case 'm':
+            runHwCharTest(myScale);
             break;
 
         default:
