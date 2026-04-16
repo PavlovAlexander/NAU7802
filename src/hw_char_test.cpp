@@ -12,6 +12,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
+#include <stdarg.h>
 #include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
 #include <esp_task_wdt.h>
 
@@ -76,6 +77,32 @@ static constexpr float EMPTY_CHECK_SIGMA_MULT = 5.0f;
 
 // Прогресс-лог каждые N мс
 static constexpr uint32_t PROGRESS_INTERVAL_MS = 10000UL;
+
+// ============================================================================
+// Таймстамп и единый вывод
+// ============================================================================
+
+/** Время старта runHwCharTest() в мс (от начала работы ESP). */
+static uint32_t g_test_start_ms = 0;
+
+/**
+ * @brief Вывод строки лога с таймстампом [MM:SS] от старта теста.
+ *
+ * Использует va_list для поддержки printf-форматирования.
+ * Пример: [03:47] [P1] idx=0 ...
+ */
+static void logPrintf(const char* fmt, ...) {
+    uint32_t elapsed = millis() - g_test_start_ms;
+    uint32_t mm = elapsed / 60000UL;
+    uint32_t ss = (elapsed % 60000UL) / 1000UL;
+    Serial.printf("[%02u:%02u] ", (unsigned)mm, (unsigned)ss);
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    Serial.print(buf);
+}
 
 // ============================================================================
 // Структуры
@@ -186,8 +213,10 @@ static bool waitReading(NAU7802& scale, uint32_t timeout_ms = READ_TIMEOUT_MS) {
  * Если получить отсчёт не удаётся за READ_TIMEOUT_MS — увеличивает i2c_err,
  * пропускает позицию (N_actual может быть < n).
  * slope рассчитывается методом МНК по (t_i, raw_i).
+ * @param label  Тег для прогресс-лога (например "P05:0g", "P1:idx=3", "P3:10g").
+ *               Передать nullptr для отключения прогресса.
  */
-static SampleStats collectStats(NAU7802& scale, uint16_t n) {
+static SampleStats collectStats(NAU7802& scale, uint16_t n, const char* label = nullptr) {
     SampleStats s{};
     s.n      = 0;
     s.i2c_err = 0;
@@ -202,6 +231,11 @@ static SampleStats collectStats(NAU7802& scale, uint16_t n) {
     s.maxVal = -1e18;
     double sum = 0.0, sum2 = 0.0;
     uint32_t t0 = millis();
+    uint32_t lastProgress = t0;
+
+    if (label) {
+        logPrintf("[COLLECT] %s: started n=%u\n", label, maxN);
+    }
 
     for (uint16_t i = 0; i < maxN; i++) {
         esp_task_wdt_reset();
@@ -219,6 +253,19 @@ static SampleStats collectStats(NAU7802& scale, uint16_t n) {
         if (v < s.minVal) s.minVal = v;
         if (v > s.maxVal) s.maxVal = v;
         s.n++;
+
+        // Прогресс каждые 5 с
+        if (label && (millis() - lastProgress >= 5000UL)) {
+            uint32_t elapsed_s = (millis() - t0) / 1000UL;
+            logPrintf("[COLLECT] %s: %u/%u elapsed=%us\n", label, s.n, maxN, elapsed_s);
+            lastProgress = millis();
+        }
+    }
+
+    if (label) {
+        uint32_t elapsed_s = (millis() - t0) / 1000UL;
+        logPrintf("[COLLECT] %s: done n=%u/%u elapsed=%us i2c_err=%u\n",
+                  label, s.n, maxN, elapsed_s, s.i2c_err);
     }
 
     if (s.n < 2) {
@@ -265,19 +312,21 @@ static void discardReadings(NAU7802& scale, uint16_t n) {
 // ============================================================================
 
 /**
- * @brief Ждать одиночного нажатия любой клавиши (очищаем буфер перед ожиданием).
+ * @brief Ждать одиночного нажатия любой клавиши с эхом.
  */
 static void waitAnyKey() {
-    while (Serial.available()) Serial.read(); // очистить буфер
+    while (Serial.available()) Serial.read();
     while (!Serial.available()) {
         esp_task_wdt_reset();
         delay(20);
     }
-    while (Serial.available()) Serial.read(); // прочитать и выбросить
+    char c = (char)Serial.read();
+    while (Serial.available()) Serial.read();
+    logPrintf("[KEY] '%c' received, continuing...\n", (c >= 32 && c < 127) ? c : '?');
 }
 
 /**
- * @brief Ждать нажатия конкретной клавиши (A или R, без учёта регистра).
+ * @brief Ждать нажатия конкретной клавиши из набора allowed (без учёта регистра).
  * @return нажатая буква в нижнем регистре.
  */
 static char waitChoice(const char* allowed) {
@@ -289,12 +338,15 @@ static char waitChoice(const char* allowed) {
         }
         char c = (char)Serial.read();
         if (c >= 'A' && c <= 'Z') c += 32;
-        while (Serial.available()) Serial.read(); // очистить хвост
-        // Проверить, есть ли c в строке allowed
+        while (Serial.available()) Serial.read();
         for (const char* p = allowed; *p; p++) {
-            if (c == *p) return c;
+            if (c == *p) {
+                logPrintf("[KEY] '%c' selected\n", c);
+                return c;
+            }
         }
-        Serial.printf(">>> Unknown key '%c'. Press one of: %s\n", c, allowed);
+        logPrintf("[KEY] unknown '%c', expected one of: %s\n",
+                  (c >= 32 && c < 127) ? c : '?', allowed);
     }
 }
 
@@ -305,39 +357,48 @@ static char waitChoice(const char* allowed) {
 /**
  * @brief Провести 4-точечную калибровку. Возвращает true при успехе (A).
  * @param[out] cal  Результат калибровки.
- * @param[out] raw0 mean первой точки 0 г (для empty-check фазы 1).
- * @param[out] sigma0_lsb sigma первой точки 0 г.
+ * @param[out] raw0 mean ФИНАЛЬНОЙ точки 0 г (raw_0_final, для empty-check фазы 1).
+ * @param[out] sigma0_lsb sigma финальной точки 0 г.
  */
 static bool runPhase05(NAU7802& scale, CalResult& cal, double& raw0_baseline, double& sigma0_baseline) {
+    logPrintf("[P05-START] 4-point calibration (0/10/20/30g + return 0g)\n");
+
     // Референсная конфигурация для калибровки
     applyConfig(scale, REF_GAIN, REF_SPS, REF_CHP);
 
     static const float load_g[4]  = {0.0f, 10.0f, 20.0f, 30.0f};
+    static const char* point_tag[5] = {"0g", "10g", "20g", "30g", "0g_final"};
     static const char* prompts[5] = {
-        ">>> WAIT: platform empty (0g), press any key",
-        ">>> WAIT: put 10g (F2 class), press any key",
-        ">>> WAIT: put 20g (F2 class), press any key",
-        ">>> WAIT: put 30g (F2 class), press any key",
-        ">>> WAIT: remove all load (0g), press any key"
+        ">>> PUT LOAD: platform empty (0g), press any key when ready",
+        ">>> PUT LOAD: put 10g (F2 class), press any key when ready",
+        ">>> PUT LOAD: put 20g (F2 class), press any key when ready",
+        ">>> PUT LOAD: put 30g (F2 class), press any key when ready",
+        ">>> PUT LOAD: remove all load (0g), press any key when ready"
     };
 
     for (uint8_t pt = 0; pt < 5; pt++) {
+        logPrintf("[P05] waiting for user: %s\n", prompts[pt]);
         Serial.println(prompts[pt]);
         waitAnyKey();
+
+        logPrintf("[P05] calib %s started (settling %us + %u samples @80SPS ~%us)\n",
+                  point_tag[pt],
+                  (unsigned)(SETTLE_MS / 1000),
+                  (unsigned)N_CAL,
+                  (unsigned)(SETTLE_MS / 1000 + N_CAL / 80));
+
         delay(SETTLE_MS);
         discardReadings(scale, N_DISCARD);
 
-        SampleStats s = collectStats(scale, N_CAL);
+        char label[24];
+        snprintf(label, sizeof(label), "P05:%s", point_tag[pt]);
+        SampleStats s = collectStats(scale, N_CAL, label);
 
         cal.raw_means[pt] = s.mean;
         cal.raw_sigma[pt] = s.sigma;
 
-        Serial.printf("[P05] point=%s n=%u mean=%.9g sigma_lsb=%.3f i2c_err=%u\n",
-                      (pt == 0) ? "0g" :
-                      (pt == 1) ? "10g" :
-                      (pt == 2) ? "20g" :
-                      (pt == 3) ? "30g" : "0g_final",
-                      s.n, s.mean, s.sigma, s.i2c_err);
+        logPrintf("[P05] point=%s n=%u mean=%.9g sigma_lsb=%.3f i2c_err=%u\n",
+                  point_tag[pt], s.n, s.mean, s.sigma, s.i2c_err);
     }
 
     // МНК через 4 точки (0, 10, 20, 30 г)
@@ -379,11 +440,11 @@ static bool runPhase05(NAU7802& scale, CalResult& cal, double& raw0_baseline, do
         ? ((cal.raw_means[4] - cal.raw_means[0]) / cal.k_lsb_per_mg)
         : 0.0;
 
-    Serial.printf("[P05-CAL] k_lsb_per_mg=%.6f offset_lsb=%.3f r2=%.9g\n",
-                  cal.k_lsb_per_mg, cal.offset_lsb, cal.r2);
-    Serial.printf("[P05-RES] resid_0=%+.3fmg resid_10=%+.3fmg resid_20=%+.3fmg resid_30=%+.3fmg\n",
-                  cal.resid_mg[0], cal.resid_mg[1], cal.resid_mg[2], cal.resid_mg[3]);
-    Serial.printf("[P05-HYS] hysteresis_0g=%+.3fmg\n", cal.hysteresis_mg);
+    logPrintf("[P05-CAL] k_lsb_per_mg=%.6f offset_lsb=%.3f r2=%.9g\n",
+              cal.k_lsb_per_mg, cal.offset_lsb, cal.r2);
+    logPrintf("[P05-RES] resid_0=%+.3fmg resid_10=%+.3fmg resid_20=%+.3fmg resid_30=%+.3fmg\n",
+              cal.resid_mg[0], cal.resid_mg[1], cal.resid_mg[2], cal.resid_mg[3]);
+    logPrintf("[P05-HYS] hysteresis_0g=%+.3fmg\n", cal.hysteresis_mg);
 
     // Подсказка качества
     double maxResid = 0.0;
@@ -400,17 +461,19 @@ static bool runPhase05(NAU7802& scale, CalResult& cal, double& raw0_baseline, do
     } else {
         hint = "poor, consider retry";
     }
-    Serial.printf("[P05-HINT] quality=%s r2=%.9g max_resid=%.3fmg hys=%.3fmg\n",
-                  hint, cal.r2, maxResid, hysAbs);
+    logPrintf("[P05-HINT] quality=%s r2=%.9g max_resid=%.3fmg hys=%.3fmg\n",
+              hint, cal.r2, maxResid, hysAbs);
 
     // Решение пользователя
     Serial.println(">>> DECISION: press A to accept, R to retry calibration");
     char choice = waitChoice("ar");
-    Serial.printf("[P05-DECISION] accepted=%s\n", (choice == 'a') ? "true" : "false");
+    logPrintf("[P05-DECISION] accepted=%s\n", (choice == 'a') ? "true" : "false");
 
     if (choice == 'a') {
-        raw0_baseline   = cal.raw_means[0];
-        sigma0_baseline = cal.raw_sigma[0];
+        // ВАЖНО: используем raw_0_FINAL (после гистерезиса), а не raw_0_initial
+        // иначе empty-check будет ловить гистерезис как "груз на платформе"
+        raw0_baseline   = cal.raw_means[4];
+        sigma0_baseline = cal.raw_sigma[4];
         return true;
     }
     return false;
@@ -420,8 +483,8 @@ static bool runPhase05(NAU7802& scale, CalResult& cal, double& raw0_baseline, do
 // Pre-flight check: убедиться что платформа пуста
 // ============================================================================
 
-static void ensureEmpty(NAU7802& scale, double raw0, double sigma0) {
-    // Применяем референсную конфигурацию для одного замера
+static void ensureEmpty(NAU7802& scale, double raw0, double sigma0, double k_lsb_per_mg) {
+    logPrintf("[EMPTY-CHECK] verifying platform is empty...\n");
     applyConfig(scale, REF_GAIN, REF_SPS, REF_CHP);
     discardReadings(scale, 3);
 
@@ -429,11 +492,40 @@ static void ensureEmpty(NAU7802& scale, double raw0, double sigma0) {
         esp_task_wdt_reset();
         if (!waitReading(scale)) continue;
         double v = (double)scale.getReading();
-        double threshold = EMPTY_CHECK_SIGMA_MULT * sigma0;
-        if (threshold < 50.0) threshold = 50.0; // минимальный порог — 50 LSB (~13 мг)
-        if (fabs(v - raw0) <= threshold) break;
+
+        // Порог: минимум 5×σ или 500 мг (что больше)
+        double threshold_sigma = EMPTY_CHECK_SIGMA_MULT * sigma0;
+        double threshold_mg    = 500.0;
+        double threshold_lsb   = (k_lsb_per_mg > 0.0) ? (threshold_mg * k_lsb_per_mg) : 500.0;
+        double threshold       = (threshold_sigma > threshold_lsb) ? threshold_sigma : threshold_lsb;
+
+        double delta_mg = (k_lsb_per_mg > 0.0) ? (fabs(v - raw0) / k_lsb_per_mg) : fabs(v - raw0);
+
+        if (fabs(v - raw0) <= threshold) {
+            logPrintf("[EMPTY-CHECK] OK (delta=%.1fmg threshold=%.1fmg)\n",
+                      delta_mg, (k_lsb_per_mg > 0.0) ? threshold / k_lsb_per_mg : threshold);
+            break;
+        }
+
+        logPrintf("[EMPTY-CHECK] FAIL delta=%.1fmg threshold=%.1fmg\n",
+                  delta_mg, (k_lsb_per_mg > 0.0) ? threshold / k_lsb_per_mg : threshold);
         Serial.println(">>> WAIT: platform must be empty, remove load and press any key");
-        waitAnyKey();
+        Serial.println(">>>       (or press S to skip this check)");
+
+        while (Serial.available()) Serial.read();
+        while (!Serial.available()) {
+            esp_task_wdt_reset();
+            delay(20);
+        }
+        char c = (char)Serial.read();
+        if (c >= 'A' && c <= 'Z') c += 32;
+        while (Serial.available()) Serial.read();
+
+        if (c == 's') {
+            logPrintf("[EMPTY-CHECK] skipped by user\n");
+            break;
+        }
+        logPrintf("[KEY] '%c' received, retrying check...\n", (c >= 32 && c < 127) ? c : '?');
         discardReadings(scale, 5);
     }
 }
@@ -445,7 +537,7 @@ static void ensureEmpty(NAU7802& scale, double raw0, double sigma0) {
 static void runPhase1(NAU7802& scale, const CalResult& cal,
                       double raw0, double sigma0,
                       SweepCombo& bestCombo, double& bestSigmaMg) {
-    Serial.println("[P1-START] gain x sps x chopper sweep (32 combos)");
+    logPrintf("[P1-START] gain x sps x chopper sweep (32 combos)\n");
 
     static const uint8_t gains[]    = {GAIN_64,  GAIN_128};
     static const uint8_t spsCodes[] = {SPS_10, SPS_40, SPS_80, SPS_320};
@@ -455,31 +547,29 @@ static void runPhase1(NAU7802& scale, const CalResult& cal,
     int bestIdx = 0;
     int idx = 0;
 
-    uint32_t progressT = millis();
-
     for (uint8_t gi = 0; gi < 2; gi++) {
         for (uint8_t si = 0; si < 4; si++) {
             for (uint8_t ci = 0; ci < 4; ci++) {
 
                 esp_task_wdt_reset();
 
-                // Прогресс-лог каждые 10 с
-                if (millis() - progressT >= PROGRESS_INTERVAL_MS) {
-                    Serial.printf("[PROGRESS] phase=1 done=%d/32\n", idx);
-                    progressT = millis();
-                }
-
                 uint8_t g = gains[gi];
                 uint8_t s = spsCodes[si];
                 uint8_t c = chpVals[ci];
 
+                logPrintf("[P1] combo %d/32 gain=%d sps=%d chop=%s started\n",
+                          idx + 1, gainValue(g), spsValue(s), chopperName(c));
+
                 applyConfig(scale, g, s, c);
                 discardReadings(scale, N_DISCARD);
 
-                SampleStats stats = collectStats(scale, N_SWEEP);
+                char label[32];
+                snprintf(label, sizeof(label), "P1:%d/32 g%d s%d %s",
+                         idx + 1, gainValue(g), spsValue(s), chopperName(c));
+                SampleStats stats = collectStats(scale, N_SWEEP, label);
 
                 // Перевод sigma в мг с поправкой на gain
-                double gainFactor = (g == GAIN_128) ? 1.0 : 0.5; // gain64 = половина LSB/мг
+                double gainFactor = (g == GAIN_128) ? 1.0 : 0.5;
                 double kEff       = (cal.k_lsb_per_mg != 0.0) ? (cal.k_lsb_per_mg * gainFactor) : 1.0;
                 double sigma_mg   = stats.sigma / kEff;
                 double p2p_mg     = stats.p2p   / kEff;
@@ -489,15 +579,15 @@ static void runPhase1(NAU7802& scale, const CalResult& cal,
                 bool skipped = (stats.i2c_err > N_SWEEP / 10);
 
                 if (skipped) {
-                    Serial.printf("[P1] idx=%-2d gain=%-3d sps=%-3d chop=%-5s SKIPPED i2c_err=%u\n",
-                                  idx, gainValue(g), spsValue(s), chopperName(c), stats.i2c_err);
+                    logPrintf("[P1] idx=%-2d gain=%-3d sps=%-3d chop=%-5s SKIPPED i2c_err=%u\n",
+                              idx, gainValue(g), spsValue(s), chopperName(c), stats.i2c_err);
                 } else {
-                    Serial.printf("[P1] idx=%-2d gain=%-3d sps=%-3d chop=%-5s n=%u "
-                                  "mean=%.9g sigma_lsb=%.3f sigma_mg=%.3f "
-                                  "p2p_mg=%.3f slope_mg_s=%.4f i2c_err=%u\n",
-                                  idx, gainValue(g), spsValue(s), chopperName(c), stats.n,
-                                  stats.mean, stats.sigma, sigma_mg,
-                                  p2p_mg, slope_mg_s, stats.i2c_err);
+                    logPrintf("[P1] idx=%-2d gain=%-3d sps=%-3d chop=%-5s n=%u "
+                              "mean=%.9g sigma_lsb=%.3f sigma_mg=%.3f "
+                              "p2p_mg=%.3f slope_mg_s=%.4f i2c_err=%u\n",
+                              idx, gainValue(g), spsValue(s), chopperName(c), stats.n,
+                              stats.mean, stats.sigma, sigma_mg,
+                              p2p_mg, slope_mg_s, stats.i2c_err);
 
                     if (sigma_mg < bestSigmaMg) {
                         bestSigmaMg = sigma_mg;
@@ -511,15 +601,15 @@ static void runPhase1(NAU7802& scale, const CalResult& cal,
         }
     }
 
-    Serial.printf("[P1-BEST] idx=%d gain=%d sps=%d chop=%s sigma_mg=%.3f\n",
-                  bestIdx,
-                  gainValue(bestCombo.gain_code),
-                  spsValue(bestCombo.sps_code),
-                  chopperName(bestCombo.chp_value),
-                  bestSigmaMg);
+    logPrintf("[P1-BEST] idx=%d gain=%d sps=%d chop=%s sigma_mg=%.3f\n",
+              bestIdx,
+              gainValue(bestCombo.gain_code),
+              spsValue(bestCombo.sps_code),
+              chopperName(bestCombo.chp_value),
+              bestSigmaMg);
+    logPrintf("[P1-DONE] sweep complete\n");
 
-    // После свипа — восстановить референсную конфигурацию для empty-check
-    ensureEmpty(scale, raw0, sigma0);
+    ensureEmpty(scale, raw0, sigma0, cal.k_lsb_per_mg);
 }
 
 // ============================================================================
@@ -527,7 +617,7 @@ static void runPhase1(NAU7802& scale, const CalResult& cal,
 // ============================================================================
 
 static void runPhase2(NAU7802& scale, const CalResult& cal) {
-    Serial.println("[P2-START] long-term zero drift test (4 configs x 2min)");
+    logPrintf("[P2-START] long-term zero drift test (4 configs x 2min)\n");
 
     struct DriftCfg {
         const char* id;
@@ -548,57 +638,52 @@ static void runPhase2(NAU7802& scale, const CalResult& cal) {
         const DriftCfg& cfg = cfgs[ci];
 
         applyConfig(scale, cfg.gain, cfg.sps, cfg.chp);
-        delay(2000); // дополнительный settle 2 с перед drift-тестом
+        delay(2000);
         discardReadings(scale, N_DISCARD);
 
-        Serial.printf("[P2-CFG] cfg=%s gain=%d sps=%d chop=%s desc=%s\n",
-                      cfg.id, gainValue(cfg.gain), spsValue(cfg.sps),
-                      chopperName(cfg.chp), cfg.desc);
+        logPrintf("[P2-CFG] cfg=%s gain=%d sps=%d chop=%s desc=%s (2min)\n",
+                  cfg.id, gainValue(cfg.gain), spsValue(cfg.sps),
+                  chopperName(cfg.chp), cfg.desc);
 
-        uint32_t phaseStart = millis();
+        uint32_t phaseStart  = millis();
         uint32_t windowStart = phaseStart;
+        uint32_t progressT   = phaseStart;
 
-        // Аккумуляторы для финальной регрессии
         double fSx = 0.0, fSy = 0.0, fSxx = 0.0, fSxy = 0.0;
         uint32_t fN = 0;
         double peakDev = 0.0;
         double firstMean = 0.0;
         bool firstWindow = true;
 
-        uint32_t progressT = phaseStart;
-
         while (millis() - phaseStart < DRIFT_DURATION_MS) {
             esp_task_wdt_reset();
 
-            // Прогрессе каждые 10 с
-            if (millis() - progressT >= PROGRESS_INTERVAL_MS) {
+            // Прогресс каждые 5 с
+            if (millis() - progressT >= 5000UL) {
                 uint32_t elapsed = (millis() - phaseStart) / 1000;
-                Serial.printf("[PROGRESS] phase=2 cfg=%s elapsed=%us/%us\n",
-                              cfg.id, elapsed, (unsigned)(DRIFT_DURATION_MS / 1000));
+                logPrintf("[PROGRESS] phase=2 cfg=%s elapsed=%us/%us\n",
+                          cfg.id, elapsed, (unsigned)(DRIFT_DURATION_MS / 1000));
                 progressT = millis();
             }
 
-            // Проверяем: прошло ли окно 10 с
+            // Окно каждые 10 с
             if (millis() - windowStart >= DRIFT_WINDOW_MS) {
-                // Собираем отсчёты за следующие ~0.5 с (40 отсчётов при 80 SPS, 5 при 10 SPS)
                 uint16_t nWindow = (spsValue(cfg.sps) >= 80) ? 40 : 5;
-                SampleStats ws = collectStats(scale, nWindow);
+                SampleStats ws = collectStats(scale, nWindow); // без label — быстрые замеры
 
                 if (firstWindow) {
                     firstMean  = ws.mean;
                     firstWindow = false;
                 }
 
-                double t_s = (millis() - phaseStart) / 1000.0;
-                double gainFactor = 1.0; // gain_128 / 128
+                double t_s  = (millis() - phaseStart) / 1000.0;
                 double kEff = (cal.k_lsb_per_mg != 0.0) ? cal.k_lsb_per_mg : 1.0;
                 double sigma_mg = ws.sigma / kEff;
                 double mean_mg  = (ws.mean - cal.offset_lsb) / kEff;
 
-                Serial.printf("[P2][cfg=%s] t=%.0fs mean_mg=%.3f sigma_mg=%.3f i2c_err=%u\n",
-                              cfg.id, t_s, mean_mg, sigma_mg, ws.i2c_err);
+                logPrintf("[P2][cfg=%s] t=%.0fs mean_mg=%.3f sigma_mg=%.3f i2c_err=%u\n",
+                          cfg.id, t_s, mean_mg, sigma_mg, ws.i2c_err);
 
-                // Аккумулируем для регрессии drift
                 fSx  += t_s;
                 fSy  += ws.mean;
                 fSxx += t_s * t_s;
@@ -614,29 +699,22 @@ static void runPhase2(NAU7802& scale, const CalResult& cal) {
             delay(10);
         }
 
-        // Финальная регрессия
         double slope_lsb_s = 0.0;
-        double driftR2 = 0.0;
         if (fN >= 2) {
             double denom = (double)fN * fSxx - fSx * fSx;
             if (denom != 0.0) {
                 slope_lsb_s = ((double)fN * fSxy - fSx * fSy) / denom;
             }
-            double meanY = fSy / fN;
-            double ssTot = 0.0, ssRes = 0.0;
-            // пересчёт R² по аккумулированным суммам (через Sxx, Sxy, Syy)
-            // Ssy не аккумулировали, поэтому даём упрощённую оценку
-            // через slope и intercept
-            (void)meanY; (void)ssTot; (void)ssRes;
-            driftR2 = 0.0; // будет помечено как N/A
         }
 
         double kEff         = (cal.k_lsb_per_mg != 0.0) ? cal.k_lsb_per_mg : 1.0;
         double slope_mg_min = slope_lsb_s * 60.0 / kEff;
 
-        Serial.printf("[P2-DONE][cfg=%s] slope_mg_min=%+.4f peak_dev_mg=%.3f windows=%u\n",
-                      cfg.id, slope_mg_min, peakDev, (unsigned)fN);
+        logPrintf("[P2-DONE][cfg=%s] slope_mg_min=%+.4f peak_dev_mg=%.3f windows=%u\n",
+                  cfg.id, slope_mg_min, peakDev, (unsigned)fN);
     }
+
+    logPrintf("[P2-DONE] all drift configs complete\n");
 }
 
 // ============================================================================
@@ -645,47 +723,52 @@ static void runPhase2(NAU7802& scale, const CalResult& cal) {
 
 static void runPhase3(NAU7802& scale, const CalResult& cal,
                       const SweepCombo& bestCombo, double bestSigmaMg) {
-    Serial.printf("[P3-START] load sweep in best config: gain=%d sps=%d chop=%s sigma_mg=%.3f\n",
-                  gainValue(bestCombo.gain_code),
-                  spsValue(bestCombo.sps_code),
-                  chopperName(bestCombo.chp_value),
-                  bestSigmaMg);
+    logPrintf("[P3-START] load sweep in best config: gain=%d sps=%d chop=%s sigma_mg=%.3f\n",
+              gainValue(bestCombo.gain_code),
+              spsValue(bestCombo.sps_code),
+              chopperName(bestCombo.chp_value),
+              bestSigmaMg);
 
     applyConfig(scale, bestCombo.gain_code, bestCombo.sps_code, bestCombo.chp_value);
 
     static const float load_g[5]   = {0.0f, 10.0f, 20.0f, 30.0f, 0.0f};
     static const char* load_tag[5] = {"0a", "10", "20", "30", "0b"};
     static const char* prompts[5]  = {
-        ">>> WAIT: platform empty (0g), press any key",
-        ">>> WAIT: put 10g, press any key",
-        ">>> WAIT: put 20g, press any key",
-        ">>> WAIT: put 30g, press any key",
-        ">>> WAIT: remove load (0g again), press any key"
+        ">>> PUT LOAD: platform empty (0g), press any key when ready",
+        ">>> PUT LOAD: put 10g, press any key when ready",
+        ">>> PUT LOAD: put 20g, press any key when ready",
+        ">>> PUT LOAD: put 30g, press any key when ready",
+        ">>> PUT LOAD: remove load (0g again), press any key when ready"
     };
 
     double means[5] = {};
     double kEff = (cal.k_lsb_per_mg != 0.0) ? cal.k_lsb_per_mg : 1.0;
-    // Поправка на gain, если best != GAIN_128
     if (bestCombo.gain_code == GAIN_64) kEff *= 0.5;
 
     for (uint8_t pt = 0; pt < 5; pt++) {
         esp_task_wdt_reset();
+        logPrintf("[P3] waiting for user: %s\n", prompts[pt]);
         Serial.println(prompts[pt]);
         waitAnyKey();
+
+        logPrintf("[P3] load=%s started (settling %us + %u samples)\n",
+                  load_tag[pt], (unsigned)(SETTLE_MS / 1000), (unsigned)N_LOAD);
         delay(SETTLE_MS);
         discardReadings(scale, N_DISCARD);
 
-        SampleStats s = collectStats(scale, N_LOAD);
+        char label[24];
+        snprintf(label, sizeof(label), "P3:%s", load_tag[pt]);
+        SampleStats s = collectStats(scale, N_LOAD, label);
         means[pt] = s.mean;
 
-        double sigma_mg = s.sigma / kEff;
-        double p2p_mg   = s.p2p   / kEff;
+        double sigma_mg   = s.sigma / kEff;
+        double p2p_mg     = s.p2p   / kEff;
         double slope_mg_s = s.slope / kEff;
 
-        Serial.printf("[P3][load=%s] n=%u mean=%.9g sigma_mg=%.3f p2p_mg=%.3f "
-                      "slope_mg_s=%.4f i2c_err=%u\n",
-                      load_tag[pt], s.n, s.mean, sigma_mg, p2p_mg,
-                      slope_mg_s, s.i2c_err);
+        logPrintf("[P3][load=%s] n=%u mean=%.9g sigma_mg=%.3f p2p_mg=%.3f "
+                  "slope_mg_s=%.4f i2c_err=%u\n",
+                  load_tag[pt], s.n, s.mean, sigma_mg, p2p_mg,
+                  slope_mg_s, s.i2c_err);
     }
 
     // Линейность: 4 точки (0a, 10, 20, 30) vs номинальные значения
@@ -717,8 +800,9 @@ static void runPhase3(NAU7802& scale, const CalResult& cal,
 
     double hysteresis_mg = (means[4] - means[0]) / kEff;
 
-    Serial.printf("[P3-LINEARITY] r2=%.9g hysteresis_0g=%+.3fmg\n",
-                  r2_lin, hysteresis_mg);
+    logPrintf("[P3-LINEARITY] r2=%.9g hysteresis_0g=%+.3fmg\n",
+              r2_lin, hysteresis_mg);
+    logPrintf("[P3-DONE] load sweep complete\n");
 }
 
 // ============================================================================
@@ -727,15 +811,16 @@ static void runPhase3(NAU7802& scale, const CalResult& cal,
 
 void runHwCharTest(NAU7802& scale) {
 
-    uint32_t t0 = millis();
+    g_test_start_ms = millis();
 
     // -----------------------------------------------------------------------
     // Фаза 0: заголовок, регистры, выбор стенда
     // -----------------------------------------------------------------------
     Serial.println();
-    Serial.println("### HW-CHAR v1.0 START ###");
+    Serial.println("============================================================");
+    Serial.println("   HW-CHAR v1.1 — hardware characterization test");
+    Serial.println("============================================================");
 
-    // Дамп регистров до любых изменений
     uint8_t reg_pu   = scale.getRegister(REG_PU_CTRL);
     uint8_t reg_c1   = scale.getRegister(REG_CTRL1);
     uint8_t reg_c2   = scale.getRegister(REG_CTRL2);
@@ -743,19 +828,14 @@ void runHwCharTest(NAU7802& scale) {
     uint8_t reg_pga  = scale.getRegister(REG_PGA);
     uint8_t reg_pwr  = scale.getRegister(REG_POWER);
 
-    // Выбор стенда
     Serial.println(">>> SELECT STAND: press S for shielded, O for open");
     char standChoice = waitChoice("so");
     const char* standName = (standChoice == 's') ? "shielded" : "open";
 
-    // META строка (cal_attempts будет обновлена после калибровки)
-    // Сначала печатаем заглушку, потом [P05-CAL] обновит контекст в логе
-    Serial.printf("[META] fw=HW-CHAR-v1.0 build=%s stand=%s t0_ms=%lu\n",
-                  __DATE__, standName, (unsigned long)t0);
-    Serial.printf("[REG] PU_CTRL=0x%02X CTRL1=0x%02X CTRL2=0x%02X ADC=0x%02X PGA=0x%02X POWER=0x%02X\n",
-                  reg_pu, reg_c1, reg_c2, reg_adc, reg_pga, reg_pwr);
+    logPrintf("[META] fw=HW-CHAR-v1.1 build=%s stand=%s\n", __DATE__, standName);
+    logPrintf("[REG] PU_CTRL=0x%02X CTRL1=0x%02X CTRL2=0x%02X ADC=0x%02X PGA=0x%02X POWER=0x%02X\n",
+              reg_pu, reg_c1, reg_c2, reg_adc, reg_pga, reg_pwr);
 
-    // Сохраняем исходные регистры для восстановления в конце
     uint8_t save_c1  = reg_c1;
     uint8_t save_c2  = reg_c2;
     uint8_t save_adc = reg_adc;
@@ -765,23 +845,22 @@ void runHwCharTest(NAU7802& scale) {
     // -----------------------------------------------------------------------
     CalResult cal{};
     double raw0_baseline   = 0.0;
-    double sigma0_baseline = 10.0; // fallback
+    double sigma0_baseline = 10.0;
 
     int calAttempts = 0;
     while (true) {
         calAttempts++;
-        Serial.printf("[P05-ATTEMPT] n=%d\n", calAttempts);
-        // Каждая попытка начинает с референсной конфигурации (применяется внутри runPhase05)
+        logPrintf("[P05-ATTEMPT] n=%d\n", calAttempts);
         if (runPhase05(scale, cal, raw0_baseline, sigma0_baseline)) break;
     }
-    Serial.printf("[META-CAL] cal_attempts=%d k_lsb_per_mg=%.6f\n",
-                  calAttempts, cal.k_lsb_per_mg);
+    logPrintf("[META-CAL] cal_attempts=%d k_lsb_per_mg=%.6f\n",
+              calAttempts, cal.k_lsb_per_mg);
 
     // -----------------------------------------------------------------------
     // Фаза 1: параметрический свип
     // -----------------------------------------------------------------------
-    // Pre-flight check перед фазой 1
-    ensureEmpty(scale, raw0_baseline, sigma0_baseline);
+    logPrintf("[PHASE] starting Phase 1: parametric sweep\n");
+    ensureEmpty(scale, raw0_baseline, sigma0_baseline, cal.k_lsb_per_mg);
 
     SweepCombo bestCombo = {REF_GAIN, REF_SPS, REF_CHP};
     double bestSigmaMg = 1e18;
@@ -790,12 +869,14 @@ void runHwCharTest(NAU7802& scale) {
     // -----------------------------------------------------------------------
     // Фаза 2: drift-тест
     // -----------------------------------------------------------------------
-    ensureEmpty(scale, raw0_baseline, sigma0_baseline);
+    logPrintf("[PHASE] starting Phase 2: drift test (8min total)\n");
+    ensureEmpty(scale, raw0_baseline, sigma0_baseline, cal.k_lsb_per_mg);
     runPhase2(scale, cal);
 
     // -----------------------------------------------------------------------
     // Фаза 3: свип нагрузок
     // -----------------------------------------------------------------------
+    logPrintf("[PHASE] starting Phase 3: load sweep\n");
     runPhase3(scale, cal, bestCombo, bestSigmaMg);
 
     // -----------------------------------------------------------------------
@@ -804,9 +885,17 @@ void runHwCharTest(NAU7802& scale) {
     scale.setRegister(REG_CTRL1,   save_c1);
     scale.setRegister(REG_CTRL2,   save_c2);
     scale.setRegister(REG_ADC_REG, save_adc);
-    // Дождаться нескольких отсчётов после восстановления
     delay(500);
 
-    uint32_t total_s = (millis() - t0) / 1000;
-    Serial.printf("### HW-CHAR DONE stand=%s total_s=%lu ###\n", standName, (unsigned long)total_s);
+    uint32_t total_ms = millis() - g_test_start_ms;
+    uint32_t tot_m    = total_ms / 60000UL;
+    uint32_t tot_s    = (total_ms % 60000UL) / 1000UL;
+
+    Serial.println();
+    Serial.println("============================================================");
+    Serial.printf("   TEST COMPLETE — stand=%s  total=%02u:%02u\n", standName, tot_m, tot_s);
+    Serial.println("   Return to main menu. Press 'h' for help.");
+    Serial.println("============================================================");
+    logPrintf("[META] DONE stand=%s total_s=%lu\n",
+              standName, (unsigned long)(total_ms / 1000));
 }
