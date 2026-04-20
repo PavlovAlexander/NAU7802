@@ -87,9 +87,25 @@ bool runCalibrationWizard(NAU7802& scale, CalibrationData& cal, CalibrationMetho
     if (method == CAL_PIECEWISE_LINEAR) methodName = "PIECEWISE_LINEAR";
     else if (method == CAL_POLYNOMIAL_2) methodName = "POLYNOMIAL_2";
     else if (method == CAL_POLYNOMIAL_3) methodName = "POLYNOMIAL_3";
-    
+
     snprintf(buf, sizeof(buf), "Method: %s, R2 = %.4f", methodName, cal.r2);
     printTagged("CALIB", buf);
+
+    // Считаем R² для всех 4 моделей на одних и тех же точках (для сравнения).
+    // Активный метод (k,b,coeffs в cal) — из блока switch выше, здесь только оценка.
+    {
+        CalibrationModule m;
+        float r2_lin = 0.0f, r2_pw = 0.0f, r2_p2 = 0.0f, r2_p3 = 0.0f;
+        m.setMethod(CAL_LINEAR);           m.calibrate(cal.points, 4); r2_lin = m.getR2();
+        m.setMethod(CAL_PIECEWISE_LINEAR); m.calibrate(cal.points, 4); r2_pw  = m.getR2();
+        m.setMethod(CAL_POLYNOMIAL_2);     m.calibrate(cal.points, 4); r2_p2  = m.getR2();
+        m.setMethod(CAL_POLYNOMIAL_3);     m.calibrate(cal.points, 4); r2_p3  = m.getR2();
+        char buf2[128];
+        snprintf(buf2, sizeof(buf2),
+                 "R2: LIN=%.4f PW=%.4f P2=%.4f P3=%.4f",
+                 r2_lin, r2_pw, r2_p2, r2_p3);
+        printTagged("CALIB", buf2);
+    }
 
     if (cal.r2 >= 0.99f) {
         saveCalibration(cal);

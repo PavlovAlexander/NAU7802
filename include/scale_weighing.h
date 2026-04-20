@@ -2,6 +2,14 @@
 #include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
 #include "calibration_data.h"
 
+// --- Управление режимом взвешивания (весовой пользовательский уровень) ---
+// Tare: следующий тик взвешивания зафиксирует текущий сглаженный вес как ноль.
+void requestTare();
+// Сброс tare в 0 (на случай перекалибровки / перезахода в режим).
+void clearTare();
+// Текущее tare-смещение в граммах (для отладки).
+float getTareOffset();
+
 // Forward declarations
 class CalibrationModule;
 class TemperatureCompensator;

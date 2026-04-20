@@ -99,6 +99,9 @@ void loop() {
 
         case STATE_CALIBRATING: {
             if (runCalibrationWizard(myScale, calibration)) {
+                // Новая калибровка → сбрасываем tare и фильтры пользовательского уровня,
+                // сразу переходим в режим взвешивания (показ текущего веса).
+                clearTare();
                 currentState = STATE_WEIGHING;
             }
             break;
@@ -136,6 +139,8 @@ void loop() {
 //   N  — новая калибровка
 //
 // Режим WEIGHING (взвешивание):
+//   Q  — выход из режима взвешивания в READY (меню)
+//   0  — tare (обнулить текущее показание)
 //   C  — перекалибровать
 //   S  — показать статус калибровки
 //
@@ -144,7 +149,7 @@ void loop() {
 //   D  — переключить диагностический режим (вкл/выкл)
 //   E  — экспорт конфигурации в Serial
 //   I  — импорт конфигурации (интерактивный режим)
-//   Q  — сохранить конфигурацию в NVS
+//   W  — сохранить конфигурацию в NVS (ранее 'Q')
 //   X  — сбросить конфигурацию к умолчаниям
 //   V  — показать статистику (выбросы, усреднение)
 //   O  — переключить фильтр выбросов (вкл/выкл)
@@ -175,6 +180,8 @@ void handleSingleChar(char cmd) {
             printTagged("HELP", "L - load calibration & start weighing");
             printTagged("HELP", "N - new calibration");
             printTagged("HELP", "--- WEIGHING state ---");
+            printTagged("HELP", "Q - exit weighing, back to menu");
+            printTagged("HELP", "0 - tare (zero current reading)");
             printTagged("HELP", "C - recalibrate");
             printTagged("HELP", "S - show calibration status");
             printTagged("HELP", "--- Accuracy components ---");
@@ -182,7 +189,7 @@ void handleSingleChar(char cmd) {
             printTagged("HELP", "D - toggle diagnostic mode");
             printTagged("HELP", "E - export config to serial");
             printTagged("HELP", "I - import config (interactive)");
-            printTagged("HELP", "Q - save config to NVS");
+            printTagged("HELP", "W - save config to NVS (was Q)");
             printTagged("HELP", "X - reset config to defaults");
             printTagged("HELP", "V - show statistics");
             printTagged("HELP", "O - toggle outlier filter");
@@ -208,6 +215,7 @@ void handleSingleChar(char cmd) {
             if (currentState == STATE_READY) {
                 if (loadCalibration(calibration)) {
                     printTagged("INIT", "Calibration loaded. Starting weighing...");
+                    clearTare();
                     currentState = STATE_WEIGHING;
                 } else {
                     printError("Failed to load calibration");
@@ -259,7 +267,25 @@ void handleSingleChar(char cmd) {
             break;
 
         case 'q':
+            // Выход из режима взвешивания обратно в READY (меню).
+            if (currentState == STATE_WEIGHING) {
+                currentState = STATE_READY;
+                printTagged("INFO", "Exited weighing mode. Back to menu.");
+                printTagged("INIT", "Press 'L' to LOAD calibration, 'N' for NEW calibration, 'H' for help");
+            }
+            break;
+
+        case 'w':
+            // Сохранить конфигурацию accuracy в NVS (ранее было на 'Q').
             cmd_accuracy_save();
+            break;
+
+        case '0':
+            // Tare (zeroing): зафиксировать текущий сглаженный вес как ноль.
+            if (currentState == STATE_WEIGHING) {
+                requestTare();
+                printTagged("TARE", "Tare requested (will apply on next tick)");
+            }
             break;
 
         case 'x':
