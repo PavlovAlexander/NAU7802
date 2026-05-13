@@ -21,7 +21,17 @@ constexpr uint8_t REG_CHPS_RECOMMENDED = 0x30;
 
 uint8_t g_chopperDelayMode = 0;
 
-bool readRegister(uint8_t reg, uint8_t& value) {
+void printReg(const char* name, uint8_t reg) {
+    uint8_t value = 0;
+    if (readNauRegister(reg, value)) {
+        Serial.printf("[REG] %s(0x%02X)=0x%02X\n", name, reg, value);
+    } else {
+        Serial.printf("[REG] %s(0x%02X)=ERR\n", name, reg);
+    }
+}
+}  // namespace
+
+bool readNauRegister(uint8_t reg, uint8_t& value) {
     Wire.beginTransmission(NAU7802_ADDR);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) {
@@ -34,33 +44,66 @@ bool readRegister(uint8_t reg, uint8_t& value) {
     return true;
 }
 
-bool writeRegister(uint8_t reg, uint8_t value) {
+bool writeNauRegister(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(NAU7802_ADDR);
     Wire.write(reg);
     Wire.write(value);
     return Wire.endTransmission() == 0;
 }
 
-void printReg(const char* name, uint8_t reg) {
+bool enableInternalAvdd() {
     uint8_t value = 0;
-    if (readRegister(reg, value)) {
-        Serial.printf("[REG] %s(0x%02X)=0x%02X\n", name, reg, value);
-    } else {
-        Serial.printf("[REG] %s(0x%02X)=ERR\n", name, reg);
+    if (!readNauRegister(NAU_REG_PU_CTRL, value)) {
+        printError("Failed to read PU_CTRL");
+        return false;
     }
+
+    const uint8_t nextValue = value | 0x80;  // PU_CTRL[7] AVDDS: use internal LDO for AVDD.
+    if (!writeNauRegister(NAU_REG_PU_CTRL, nextValue)) {
+        printError("Failed to enable AVDDS");
+        return false;
+    }
+
+    delay(300);
+
+    uint8_t readback = 0;
+    if (!readNauRegister(NAU_REG_PU_CTRL, readback)) {
+        printError("Failed to read PU_CTRL after AVDDS");
+        return false;
+    }
+
+    Serial.printf("[REG] PU_CTRL=0x%02X (AVDDS=%u)\n",
+                  readback,
+                  (readback & 0x80) ? 1 : 0);
+    return (readback & 0x80) != 0;
 }
-}  // namespace
+
+bool dumpAndValidatePowerState() {
+    printRegisterDump();
+
+    uint8_t puCtrl = 0;
+    if (!readNauRegister(NAU_REG_PU_CTRL, puCtrl)) {
+        printError("Failed to validate PU_CTRL");
+        return false;
+    }
+
+    if ((puCtrl & 0x80) == 0) {
+        printError("PU_CTRL AVDDS bit is not set");
+        return false;
+    }
+    return true;
+}
 
 bool initChopperControl() {
     uint8_t value = 0;
-    if (!readRegister(NAU_REG_ADC_CTRL1, value)) {
+    if (!readNauRegister(NAU_REG_ADC_CTRL1, value)) {
         printError("Failed to read ADC_CTRL1");
         return false;
     }
 
     // Keep the datasheet-recommended REG_CHPS bits at 0b11 and preserve current delay bits.
     const uint8_t normalized = (value | REG_CHPS_RECOMMENDED);
-    if (normalized != value && !writeRegister(NAU_REG_ADC_CTRL1, normalized)) {
+    if (normalized != value && !writeNauRegister(NAU_REG_ADC_CTRL1, normalized)) {
         printError("Failed to normalize ADC_CTRL1 REG_CHPS bits");
         return false;
     }
@@ -74,14 +117,14 @@ bool initChopperControl() {
 
 bool applyChopperDelayMode(uint8_t mode) {
     uint8_t value = 0;
-    if (!readRegister(NAU_REG_ADC_CTRL1, value)) {
+    if (!readNauRegister(NAU_REG_ADC_CTRL1, value)) {
         printError("Failed to read ADC_CTRL1");
         return false;
     }
 
     const uint8_t nextMode = mode & REG_CHP_MASK;
     const uint8_t nextValue = (value & ~REG_CHP_MASK) | REG_CHPS_RECOMMENDED | nextMode;
-    if (!writeRegister(NAU_REG_ADC_CTRL1, nextValue)) {
+    if (!writeNauRegister(NAU_REG_ADC_CTRL1, nextValue)) {
         printError("Failed to write ADC_CTRL1");
         return false;
     }

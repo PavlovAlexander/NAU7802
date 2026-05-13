@@ -2,6 +2,15 @@
 
 #include <Preferences.h>
 
+namespace {
+constexpr int32_t CALIBRATION_MIN_RAW_SPAN = 10000;
+
+int32_t rawSpanAbs(const CalibrationData& cal) {
+    const int32_t span = cal.points[3].rawADC - cal.points[0].rawADC;
+    return (span < 0) ? -span : span;
+}
+}  // namespace
+
 void saveCalibration(const CalibrationData& cal) {
     Preferences prefs;
     prefs.begin("scale_cal", false);
@@ -44,5 +53,5 @@ bool loadCalibration(CalibrationData& cal) {
     }
 
     prefs.end();
-    return cal.timestamp != 0;
+    return cal.timestamp != 0 && rawSpanAbs(cal) >= CALIBRATION_MIN_RAW_SPAN;
 }

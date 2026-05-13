@@ -1,5 +1,6 @@
 #include "scale_weighing_7semi.h"
 
+#include "scale_init_7semi.h"
 #include "ui_console_7semi.h"
 
 #include <Arduino.h>
@@ -11,10 +12,16 @@ constexpr float WEIGH_ALPHA_FAST = 0.70f;
 constexpr float WEIGH_ALPHA_SLOW = 0.15f;
 constexpr float WEIGH_BIG_DELTA_G = 0.030f;
 
+// 7Semi library: readAverage splits maxTimeout across samples; total wall time also capped at maxTimeout.
+constexpr unsigned long WEIGH_READ_TIMEOUT_MS = 4000;
+constexpr uint8_t WEIGH_READ_ATTEMPTS = 4;
+constexpr uint8_t WEIGH_FAIL_STREAK_REINIT = 3;
+
 bool g_tarePending = false;
 float g_tareOffset = 0.0f;
 float g_smoothed = NAN;
 float g_displayed = NAN;
+uint8_t g_readFailStreak = 0;
 
 float smoothWeight(float raw) {
     if (isnan(g_smoothed)) {
@@ -77,11 +84,36 @@ float piecewiseWeightFromRaw(const CalibrationData& cal, int32_t rawADC) {
 
 void weighingTick(NAU7802_7Semi& scale, const CalibrationData& cal) {
     int32_t rawADC = 0;
-    if (!scale.readAverage(rawADC, 16, 1200)) {
-        printError("Weight read timeout");
+    bool readOk = false;
+    for (uint8_t attempt = 0; attempt < WEIGH_READ_ATTEMPTS; attempt++) {
+        if (scale.readAverage(rawADC, 16, WEIGH_READ_TIMEOUT_MS)) {
+            readOk = true;
+            break;
+        }
+        delay(5);
+    }
+
+    if (!readOk) {
+        g_readFailStreak++;
+        Serial.printf("[ERROR] Weight read timeout (ms=%lu streak=%u attempt=%u)\n",
+                      static_cast<unsigned long>(millis()),
+                      static_cast<unsigned>(g_readFailStreak),
+                      static_cast<unsigned>(WEIGH_READ_ATTEMPTS));
+        if (g_readFailStreak >= WEIGH_FAIL_STREAK_REINIT) {
+            printTagged("RECOVER", "Reinitializing NAU7802 after repeated read timeouts");
+            if (initHardware(scale)) {
+                g_readFailStreak = 0;
+                resetWeighingFilter();
+                printTagged("RECOVER", "NAU7802 reinit completed");
+            } else {
+                printError("NAU7802 reinit failed");
+            }
+        }
         delay(50);
         return;
     }
+
+    g_readFailStreak = 0;
 
     float weight = piecewiseWeightFromRaw(cal, rawADC);
     if (g_tarePending) {

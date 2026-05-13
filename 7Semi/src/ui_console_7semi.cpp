@@ -39,6 +39,6 @@ void printHelp() {
     printTagged("HELP", "C - recalibrate");
     printTagged("HELP", "S - show calibration status");
     printTagged("HELP", "J - cycle ADC chopper delay mode (REG0x15[1:0])");
-    printTagged("HELP", "U - print NAU7802 register dump");
+    printTagged("HELP", "U - print NAU7802 register dump (PU_CTRL/CTRL1/CTRL2/ADC_CTRL1/...)");
     printTagged("HELP", "==============================");
 }

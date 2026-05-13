@@ -10,6 +10,10 @@
 // - REG0x15[1:0] REG_CHP: delay between ADC CLKSD and ADC chopper clock CHP_CLKSD.
 
 bool initChopperControl();
+bool enableInternalAvdd();
+bool readNauRegister(uint8_t reg, uint8_t& value);
+bool writeNauRegister(uint8_t reg, uint8_t value);
+bool dumpAndValidatePowerState();
 bool applyChopperDelayMode(uint8_t mode);
 bool cycleChopperMode(NAU7802_7Semi& scale);
 void printRegisterDump();

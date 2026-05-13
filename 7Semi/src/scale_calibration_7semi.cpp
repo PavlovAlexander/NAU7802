@@ -6,6 +6,8 @@
 #include <Arduino.h>
 
 namespace {
+constexpr int32_t ADC_SATURATION_THRESHOLD = 8388000;
+constexpr int32_t CALIBRATION_MIN_RAW_SPAN = 10000;
 
 float computeLinearR2(const CalibrationPoint* p, int n, float k, float b) {
     if (n < 2) return 0.0f;
@@ -47,6 +49,12 @@ bool collectPoint(NAU7802_7Semi& scale, float targetWeight, CalibrationPoint& ou
         printError("Failed to collect ADC samples");
         return false;
     }
+    if (avgRaw <= -ADC_SATURATION_THRESHOLD || avgRaw >= ADC_SATURATION_THRESHOLD) {
+        printError("ADC saturated: check AVDD/excitation/register init");
+        snprintf(msg, sizeof(msg), "Saturated raw=%ld for %.0fg", static_cast<long>(avgRaw), targetWeight);
+        printTagged("CALIB", msg);
+        return false;
+    }
     outPoint.rawADC = avgRaw;
     outPoint.weight = targetWeight;
     snprintf(msg, sizeof(msg), "Captured raw=%ld for %.0fg", static_cast<long>(avgRaw), targetWeight);
@@ -69,7 +77,7 @@ bool runCalibrationWizard(NAU7802_7Semi& scale, CalibrationData& cal) {
     const float x3 = static_cast<float>(cal.points[3].rawADC);
     const float y0 = cal.points[0].weight;
     const float y3 = cal.points[3].weight;
-    if (fabsf(x3 - x0) < 1.0f) {
+    if (fabsf(x3 - x0) < static_cast<float>(CALIBRATION_MIN_RAW_SPAN)) {
         printError("Calibration failed: raw span too small");
         return false;
     }
