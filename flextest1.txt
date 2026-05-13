@@ -1,0 +1,3 @@
+[WEIGH] W=0.002g | RAW=2505247 | PGA=7(p128) LDO=1(ldo42) N=26 T=3000 af=0.80 as=0.40 dG=0.005 db=0.001 F=custom CH=0
+[WEIGH] W=0.002g | RAW=2505093 | PGA=7(p128) LDO=1(ldo42) N=26 T=3000 af=0.80 as=0.40 dG=0.005 db=0.001 F=custom CH=0
+[WEIGH] W=0.002g | RAW=2505001 | PGA=7(p128) LDO=1(ldo42) N=26 T=3000 af=0.80 as=0.40 dG=0.005 db=0.001 F=custom CH=0
