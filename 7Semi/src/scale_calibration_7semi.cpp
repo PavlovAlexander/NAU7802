@@ -2,6 +2,7 @@
 
 #include "calibration_storage.h"
 #include "ui_console_7semi.h"
+#include "weigh_runtime_7semi.h"
 
 #include <Arduino.h>
 
@@ -44,8 +45,19 @@ bool collectPoint(NAU7802_7Semi& scale, float targetWeight, CalibrationPoint& ou
     delay(80);
     while (Serial.available() > 0) Serial.read();
 
+    const uint8_t nSamples = weighRuntimeGetCalWizardNumSamples();
+    const unsigned long tMs = weighRuntimeGetCalWizardTimeoutMs();
+    char msgSetup[96];
+    snprintf(msgSetup,
+             sizeof(msgSetup),
+             "readAverage N=%u T=%lu ms (mult %u)",
+             static_cast<unsigned>(nSamples),
+             static_cast<unsigned long>(tMs),
+             static_cast<unsigned>(weighRuntimeGetCalWizardMult()));
+    printTagged("CALIB", msgSetup);
+
     int32_t avgRaw = 0;
-    if (!scale.readAverage(avgRaw, 50, 2000)) {
+    if (!scale.readAverage(avgRaw, nSamples, tMs)) {
         printError("Failed to collect ADC samples");
         return false;
     }

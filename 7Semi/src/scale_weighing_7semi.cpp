@@ -1,19 +1,15 @@
 #include "scale_weighing_7semi.h"
 
+#include "chopper_control_7semi.h"
 #include "scale_init_7semi.h"
 #include "ui_console_7semi.h"
+#include "weigh_runtime_7semi.h"
 
 #include <Arduino.h>
 #include <math.h>
 
 namespace {
-constexpr float WEIGH_DEADBAND_G = 0.002f;
-constexpr float WEIGH_ALPHA_FAST = 0.70f;
-constexpr float WEIGH_ALPHA_SLOW = 0.15f;
-constexpr float WEIGH_BIG_DELTA_G = 0.030f;
 
-// 7Semi library: readAverage splits maxTimeout across samples; total wall time also capped at maxTimeout.
-constexpr unsigned long WEIGH_READ_TIMEOUT_MS = 4000;
 constexpr uint8_t WEIGH_READ_ATTEMPTS = 4;
 constexpr uint8_t WEIGH_FAIL_STREAK_REINIT = 3;
 
@@ -29,7 +25,8 @@ float smoothWeight(float raw) {
         return raw;
     }
     const float delta = fabsf(raw - g_smoothed);
-    const float alpha = (delta > WEIGH_BIG_DELTA_G) ? WEIGH_ALPHA_FAST : WEIGH_ALPHA_SLOW;
+    const float alpha =
+        (delta > weighRuntimeGetBigDeltaG()) ? weighRuntimeGetAlphaFast() : weighRuntimeGetAlphaSlow();
     g_smoothed += alpha * (raw - g_smoothed);
     return g_smoothed;
 }
@@ -39,7 +36,7 @@ float applyDeadband(float smoothed) {
         g_displayed = smoothed;
         return smoothed;
     }
-    if (fabsf(smoothed - g_displayed) >= WEIGH_DEADBAND_G) {
+    if (fabsf(smoothed - g_displayed) >= weighRuntimeGetDeadbandG()) {
         g_displayed = smoothed;
     }
     return g_displayed;
@@ -85,8 +82,10 @@ float piecewiseWeightFromRaw(const CalibrationData& cal, int32_t rawADC) {
 void weighingTick(NAU7802_7Semi& scale, const CalibrationData& cal) {
     int32_t rawADC = 0;
     bool readOk = false;
+    const uint8_t n = weighRuntimeGetReadNumSamples();
+    const unsigned long tMs = weighRuntimeGetReadTimeoutMs();
     for (uint8_t attempt = 0; attempt < WEIGH_READ_ATTEMPTS; attempt++) {
-        if (scale.readAverage(rawADC, 16, WEIGH_READ_TIMEOUT_MS)) {
+        if (scale.readAverage(rawADC, n, tMs)) {
             readOk = true;
             break;
         }
@@ -126,5 +125,23 @@ void weighingTick(NAU7802_7Semi& scale, const CalibrationData& cal) {
 
     const float smoothed = smoothWeight(weight);
     const float display = applyDeadband(smoothed);
-    Serial.printf("[WEIGH] W=%.3fg | RAW=%ld\n", display, static_cast<long>(rawADC));
+    const PGA_gain_select pga = weighRuntimeGetPga();
+    const LDO_Output_Voltage ldo = weighRuntimeGetLdo();
+    Serial.printf(
+        "[WEIGH] W=%.3fg | RAW=%ld | PGA=%u(%s) LDO=%u(%s) N=%u T=%lu af=%.2f as=%.2f dG=%.3f db=%.3g F=%s "
+        "CH=%u\n",
+        display,
+        static_cast<long>(rawADC),
+        static_cast<unsigned>(pga),
+        weighRuntimePgaLabel(pga),
+        static_cast<unsigned>(ldo),
+        weighRuntimeLdoLabel(ldo),
+        static_cast<unsigned>(n),
+        static_cast<unsigned long>(tMs),
+        weighRuntimeGetAlphaFast(),
+        weighRuntimeGetAlphaSlow(),
+        weighRuntimeGetBigDeltaG(),
+        weighRuntimeGetDeadbandG(),
+        weighRuntimeGetFilterName(),
+        static_cast<unsigned>(getChopperDelayMode()));
 }
