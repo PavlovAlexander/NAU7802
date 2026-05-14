@@ -1,0 +1,45 @@
+#include "ui_console_7semi.h"
+
+#include <Arduino.h>
+
+void printTagged(const char* tag, const char* msg) {
+    Serial.printf("[%s] %s\n", tag, msg);
+}
+
+void printError(const char* msg) {
+    printTagged("ERROR", msg);
+}
+
+void printStatus(const CalibrationData& cal) {
+    const char* method = (cal.method == CAL_PIECEWISE_LINEAR) ? "PIECEWISE" : "LINEAR";
+    Serial.println("=== Calibration Status ===");
+    Serial.printf("Method: %s\n", method);
+    Serial.printf("R2: %.6f\n", cal.r2);
+    Serial.printf("Timestamp: %lu\n", static_cast<unsigned long>(cal.timestamp));
+    for (int i = 0; i < 4; i++) {
+        Serial.printf("P%d: raw=%ld, weight=%.3fg\n",
+                      i,
+                      static_cast<long>(cal.points[i].rawADC),
+                      cal.points[i].weight);
+    }
+    Serial.println("==========================");
+}
+
+void printHelp() {
+    Serial.println();
+    printTagged("HELP", "======== Key Commands (final7semi) ========");
+    printTagged("HELP", "H - эта справка");
+    printTagged("HELP", "R - перезагрузка устройства");
+    printTagged("HELP", "--- READY (меню) ---");
+    printTagged("HELP", "L - загрузить калибровку и начать взвешивание");
+    printTagged("HELP", "N - новая калибровка");
+    printTagged("HELP", "--- WEIGHING ---");
+    printTagged("HELP", "Q - выйти из взвешивания в меню");
+    printTagged("HELP", "T - тара (ноль под текущий груз)");
+    printTagged("HELP", "Z - сброс тары и смещения фильтра");
+    printTagged("HELP", "C - перекалибровка (мастер)");
+    printTagged("HELP", "S - статус калибровки");
+    printTagged("HELP", "U - дамп регистров NAU7802");
+    printTagged("HELP", "PGA/LDO/N/T/фильтр/chopper зафиксированы в прошивке.");
+    printTagged("HELP", "===========================================");
+}
